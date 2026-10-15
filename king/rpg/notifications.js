@@ -11,12 +11,23 @@
  */
 
 const { GlobalPlayer, Guild } = require('./model');
-const { getWorldTime } = require('./worldTime');
+const { getWorldTime, WorldConfig } = require('./worldTime');
 const { buildBox } = require('./db');
 
-// Track last world event to avoid spam
-let _lastEventAnnounced = null;
-let _lastEventTime      = 0;
+// Auto-delete helper — removes a sent message for everyone after `ms`.
+// In-memory timer: if the bot restarts before it fires, that message stays.
+const AUTO_DELETE_MS = 30 * 60 * 1000;
+function autoDelete(Malvin, jid, sent, ms = AUTO_DELETE_MS) {
+    const key = sent && sent.key;
+    if (!key) return;
+    const t = setTimeout(async () => {
+        try { await Malvin.sendMessage(jid, { delete: key }); } catch (e) {}
+    }, ms);
+    if (t.unref) t.unref();
+}
+
+// Announced-event key lives in WorldConfig (survives restarts/redeploys)
+const ACTIVE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Main notification runner — called every 30 minutes by index.js
@@ -24,8 +35,8 @@ let _lastEventTime      = 0;
 async function runNotifications(Malvin, botId) {
     try {
         await Promise.all([
-            processPassiveIncome(Malvin, botId),
             checkWorldEvents(Malvin),
+            processPassiveIncome(Malvin, botId),
             drainPetHunger(),
             checkPetHunger(Malvin),
         ]);
@@ -77,21 +88,25 @@ async function checkWorldEvents(Malvin) {
     try {
         const wt = await getWorldTime();
         const event = wt.activeEvent;
-        if (!event) {
-            _lastEventAnnounced = null;
-            return;
-        }
+        if (!event) return;
 
-        // Only announce once per event (not every 30 min)
-        const eventKey = `${event.type}_${Math.floor(wt.totalIngameDays / 3)}`;
-        if (_lastEventAnnounced === eventKey) return;
-        _lastEventAnnounced = eventKey;
+        // Announce each occurrence once, even across restarts (atomic claim)
+        const claim = await WorldConfig.updateOne(
+            { _id: 'aevoria', lastAnnouncedEvent: { $ne: event.eventId } },
+            { $set: { lastAnnouncedEvent: event.eventId } }
+        );
+        if (!claim.modifiedCount) return;
 
-        // Get all active players (logged in within last 24h)
+        // Players active in the last 24h, one message per chat (groups share a chat)
+        const since = new Date(Date.now() - ACTIVE_WINDOW_MS);
         const activePlayers = await GlobalPlayer.find({
             lastActiveChat: { $exists: true, $ne: null },
+            lastActiveAt:   { $gte: since },
             registered: true,
-        }).limit(500);
+            eventNotifs: { $ne: false }, // players who opted out are skipped
+        }).select('lastActiveChat').sort({ lastActiveAt: -1 }).limit(500).lean();
+
+        const chats = [...new Set(activePlayers.map(p => p.lastActiveChat))];
 
         const msg = buildBox(`${event.emoji} ${event.name.toUpperCase()}!`, [
             `  ⚠️ *${event.name}* has risen over Aevoria!`,
@@ -107,14 +122,14 @@ async function checkWorldEvents(Malvin) {
             `  📅 ${wt.dayOfMonth}th ${wt.month}, Year ${wt.year} AE`,
         ]);
 
-        // Broadcast to all active players
         let sent = 0;
-        for (const player of activePlayers) {
+        for (const chat of chats) {
             if (sent >= 100) break; // rate limit
             try {
-                await Malvin.sendMessage(player.lastActiveChat, { text: msg });
+                const res = await Malvin.sendMessage(chat, { text: msg });
+                autoDelete(Malvin, chat, res); // remove after 30 min
                 sent++;
-                await new Promise(r => setTimeout(r, 200)); // 200ms delay between sends
+                await new Promise(r => setTimeout(r, 200));
             } catch (e) {}
         }
     } catch (e) {
@@ -165,7 +180,7 @@ async function trackLastActiveChat(jid, chatJid) {
     try {
         await GlobalPlayer.findOneAndUpdate(
             { jid },
-            { $set: { lastActiveChat: chatJid } }
+            { $set: { lastActiveChat: chatJid, lastActiveAt: new Date() } }
         );
     } catch (e) {}
 }
@@ -204,6 +219,7 @@ async function drainPetHunger() {
 
 module.exports = {
     runNotifications,
+    autoDelete,
     trackLastActiveChat,
     processPassiveIncome,
     checkWorldEvents,
