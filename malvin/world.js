@@ -13,6 +13,7 @@
  * ── World Time ────────────────────────────────────────────────────────────
  * .worldtime  — View current world time
  * .worldmod   — View active gameplay modifiers
+ * .eventalerts — Turn blood moon / eclipse alerts on or off
  * .settime    — [Owner] Set time multiplier
  * .forceevent — [Owner] Force a world event
  * .skipseason — [Owner] Skip to a season
@@ -472,6 +473,51 @@ mxd(
                 ...(ageLine ? [`  ───────`, ageLine] : []),
                 `  ───────`,
                 `  ⚡ Speed: *${wt.timeMultiplier === 0 ? 'FROZEN' : wt.timeMultiplier + 'x'}*`,
+            ])
+        );
+    }
+);
+
+// ════════════════════════════════════════════════════════════════════════════
+// .eventalerts — Turn blood moon / eclipse alert messages on or off
+// ════════════════════════════════════════════════════════════════════════════
+mxd(
+    {
+        pattern:     'eventalerts',
+        aliases:     ['bmalert', 'bloodmoonalert', 'worldalerts'],
+        category:    'rpg',
+        react:       '🌕',
+        description: 'Turn blood moon / eclipse alerts on or off',
+    },
+    async (from, Malvin, conText) => {
+        const { sender, reply, react, botId, q } = conText;
+
+        await getPlayer(sender, botId);
+        const arg = (q || '').trim().toLowerCase();
+
+        if (!['on', 'off'].includes(arg)) {
+            const player = await fetchPlayer(sender);
+            const status = player?.eventNotifs === false ? 'OFF' : 'ON';
+            return reply(
+                buildBox('EVENT ALERTS', [
+                    `  Blood moon / eclipse alerts: *${status}*`,
+                    `  ───────`,
+                    `  *.eventalerts on*  — get alerts`,
+                    `  *.eventalerts off* — mute alerts`,
+                ])
+            );
+        }
+
+        const enabled = arg === 'on';
+        await GlobalPlayer.updateOne({ jid: sender }, { $set: { eventNotifs: enabled } });
+        await react('🌕');
+        await reply(
+            buildBox('EVENT ALERTS', [
+                `  Blood moon / eclipse alerts: *${enabled ? 'ON' : 'OFF'}*`,
+                `  ───────`,
+                enabled
+                    ? `  You will be notified when a world event starts.`
+                    : `  You will no longer receive world event messages.`,
             ])
         );
     }
