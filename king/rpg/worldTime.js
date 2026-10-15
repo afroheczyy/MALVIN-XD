@@ -22,6 +22,7 @@ const WorldConfigSchema = new mongoose.Schema({
     epochOffset:    { type: Number, default: 0      }, // ms offset from admin skips
     forcedEvent:    { type: String, default: null   }, // 'bloodmoon','eclipse',null
     forcedEventEnd: { type: Date,   default: null   }, // when forced event expires
+    lastAnnouncedEvent: { type: String, default: null }, // survives restarts, stops re-announce spam
     worldName:      { type: String, default: 'Aevoria' },
     updatedAt:      { type: Date,   default: Date.now },
 }, { _id: false });
@@ -152,16 +153,30 @@ function _buildTimeObject(realElapsedMs, cfg) {
     // Time of day
     const timeOfDay = TIME_OF_DAY.find(t => t.hours.includes(ingameHour)) || TIME_OF_DAY[0];
 
+    // Forced events expire by timestamp (setTimeout alone is lost on restart)
+    const forcedActive = !!cfg.forcedEvent &&
+        (!cfg.forcedEventEnd || new Date(cfg.forcedEventEnd).getTime() > Date.now());
+    const forced       = forcedActive ? cfg.forcedEvent : null;
+
     // Bloodmoon check
     const dayInCycle       = totalIngameDays % BLOODMOON_CYCLE;
-    const isBloodmoon      = (cfg.forcedEvent === 'bloodmoon') ||
-                             (dayInCycle >= BLOODMOON_CYCLE - BLOODMOON_DURATION);
-    const isEclipse        = cfg.forcedEvent === 'eclipse';
+    const naturalBloodmoon = dayInCycle >= BLOODMOON_CYCLE - BLOODMOON_DURATION;
+    const isBloodmoon      = (forced === 'bloodmoon') || naturalBloodmoon;
+    const isEclipse        = forced === 'eclipse';
 
-    // Active event
+    // Active event (eventId is unique per occurrence, used to announce each once)
+    const forcedStamp = cfg.forcedEventEnd ? new Date(cfg.forcedEventEnd).getTime() : 'x';
     let activeEvent = null;
-    if (isBloodmoon)  activeEvent = { name: 'Blood Moon',  emoji: '🌕', type: 'bloodmoon' };
-    if (isEclipse)    activeEvent = { name: 'Solar Eclipse', emoji: '🌑', type: 'eclipse'  };
+    if (isBloodmoon)  activeEvent = {
+        name: 'Blood Moon', emoji: '🌕', type: 'bloodmoon',
+        eventId: forced === 'bloodmoon'
+            ? `bloodmoon_forced_${forcedStamp}`
+            : `bloodmoon_${Math.floor(totalIngameDays / BLOODMOON_CYCLE)}`,
+    };
+    if (isEclipse)    activeEvent = {
+        name: 'Solar Eclipse', emoji: '🌑', type: 'eclipse',
+        eventId: `eclipse_forced_${forcedStamp}`,
+    };
 
     return {
         // World identity
@@ -192,7 +207,7 @@ function _buildTimeObject(realElapsedMs, cfg) {
 
         // Admin config
         timeMultiplier: cfg.timeMultiplier,
-        forcedEvent:    cfg.forcedEvent,
+        forcedEvent:    forced,
 
         // Raw
         totalIngameDays,
