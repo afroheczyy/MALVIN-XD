@@ -286,6 +286,8 @@ const GlobalPlayerSchema = new mongoose.Schema(
         lastDeathTime:  { type: Date,   default: null          }, // for streak tracking
         dailyStreak:    { type: Number, default: 0             }, // consecutive daily claims
         lastActiveChat: { type: String, default: null          }, // for notifications
+        lastActiveAt:   { type: Date,   default: null          }, // for notification targeting
+        eventNotifs:    { type: Boolean, default: true         }, // world event (blood moon/eclipse) alerts on/off
         rpgBanned:      { type: Boolean, default: false         }, // banned from RPG
         activeBoosts:   { type: mongoose.Schema.Types.Mixed, default: {} }, // timed boosts
 
